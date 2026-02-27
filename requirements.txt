@@ -1,0 +1,13 @@
+# requirements.txt
+streamlit
+pandas
+openpyxl
+sentence-transformers
+requests
+pymorphy2
+gdown
+torch
+psutil
+beautifulsoup4
+setuptools==69.5.1
+wheel
