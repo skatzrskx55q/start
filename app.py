@@ -118,6 +118,30 @@ def show_success(message: str) -> None:
     st.markdown(_build_alert_html(message, "success"), unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
+#  Компонент пошагового мастера
+
+def _render_stepper(current_step: int, total_steps: int, titles: list[str], icons: list[str]) -> None:
+    """Отрисовывает горизонтальный индикатор шагов (stepper).
+
+    current_step — номер текущего шага (1-indexed), total_steps — общее количество шагов.
+    titles и icons — списки названий и классов Font Awesome для каждого шага.
+    """
+    parts: list[str] = []
+    for i in range(total_steps):
+        step_index = i + 1
+        active = "active" if step_index == current_step else ""
+        icon = icons[i] if i < len(icons) else "fa-circle"
+        title = titles[i] if i < len(titles) else f"Шаг {step_index}"
+        parts.append(
+            f"<div class='step {active}'>"
+            f"<div class='circle'><i class='fa-solid {icon}'></i></div>"
+            f"<div class='label'>{html.escape(title)}</div>"
+            "</div>"
+        )
+    html_content = "<div class='stepper'>" + "".join(parts) + "</div>"
+    st.markdown(html_content, unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
 #  Глобальные константы и настройки
 
 PROJECTS_DIR = Path(".projects")
@@ -384,6 +408,57 @@ def _inject_custom_styles():
         }
         .ux-alert.success i {
             color: #22c55e;
+        }
+        /* Шаги мастера конфигурации */
+        .stepper {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1.5rem;
+        }
+        .step {
+            position: relative;
+            flex: 1;
+            text-align: center;
+        }
+        .step .circle {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: 2px solid var(--ux-border);
+            background: var(--ux-surface);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--ux-muted);
+            font-size: 18px;
+        }
+        .step.active .circle {
+            background: var(--ux-primary);
+            border-color: var(--ux-primary);
+            color: #fff;
+        }
+        .step .label {
+            margin-top: 0.5rem;
+            font-size: 12px;
+            color: var(--ux-muted);
+            white-space: nowrap;
+        }
+        .step.active .label {
+            color: var(--ux-primary);
+            font-weight: 600;
+        }
+        .step:not(:last-child)::after {
+            content: "";
+            position: absolute;
+            top: 20px;
+            right: -50%;
+            width: 100%;
+            height: 2px;
+            background: var(--ux-border);
+        }
+        .step.active + .step::after {
+            background: var(--ux-primary);
         }
         </style>
         """,
@@ -975,238 +1050,381 @@ def _render_preview(config: dict, file_name: str, file_bytes: bytes, sheet_name:
         else:
             show_info("Совпадений в точном поиске нет.")
 
-def _render_builder():
-    st.markdown("### 1) Загрузка таблицы")
-    uploaded_file = st.file_uploader("Файл данных", type=["xlsx", "xls", "xlsm", "csv", "txt"])
-    file_name = st.session_state.get("builder_file_name")
-    file_bytes = st.session_state.get("builder_file_bytes")
-    sheet_name = st.session_state.get("builder_sheet_name")
-    if uploaded_file is not None:
-        file_name = uploaded_file.name
-        file_bytes = uploaded_file.getvalue()
-        st.session_state["builder_file_name"] = file_name
-        st.session_state["builder_file_bytes"] = file_bytes
-        if not _is_excel(file_name):
-            st.session_state["builder_sheet_name"] = None
-            sheet_name = None
-    if not file_name or not file_bytes:
-        show_info("Загрузите таблицу, чтобы открыть визуальный конструктор.")
+def _render_builder_wizard() -> None:
+    """Отображает пошаговый конструктор проекта.
+
+    Мастер разделён на четыре шага: загрузка, назначение типов колонок, настройки,
+    предпросмотр. Состояние текущего шага хранится в st.session_state['builder_step'].
+    При переходе между шагами сохраняем промежуточные данные (файл, мэппинг,
+    параметры).
+    """
+    # Определяем названия и иконки шагов для отображения в индикаторе
+    step_titles = ["Загрузка", "Назначение", "Настройки", "Предпросмотр"]
+    step_icons = ["fa-upload", "fa-table-cells", "fa-sliders-h", "fa-search"]
+    total_steps = len(step_titles)
+    # Получаем текущий шаг (1 по умолчанию)
+    current_step = int(st.session_state.get("builder_step", 1))
+    # Ограничиваем диапазон шагов
+    if current_step < 1:
+        current_step = 1
+    if current_step > total_steps:
+        current_step = total_steps
+    st.session_state["builder_step"] = current_step
+    # Отрисовываем индикатор прогресса
+    _render_stepper(current_step, total_steps, step_titles, step_icons)
+    # Читаем из session_state ранее загруженные данные
+    file_name: str | None = st.session_state.get("builder_file_name")
+    file_bytes: bytes | None = st.session_state.get("builder_file_bytes")
+    sheet_name: str | None = st.session_state.get("builder_sheet_name")
+    builder_mapping: dict | None = st.session_state.get("builder_mapping")
+    builder_settings: dict | None = st.session_state.get("builder_settings")
+    # Шаг 1: Загрузка файла
+    if current_step == 1:
+        st.header("Шаг 1: Загрузка таблицы")
+        uploaded_file = st.file_uploader(
+            "Выберите файл (Excel, CSV, TXT)",
+            type=["xlsx", "xls", "xlsm", "csv", "txt"],
+            key="_builder_file_uploader",
+        )
+        if uploaded_file is not None:
+            file_name = uploaded_file.name
+            file_bytes = uploaded_file.getvalue()
+            # Сохраняем файл в session_state
+            st.session_state["builder_file_name"] = file_name
+            st.session_state["builder_file_bytes"] = file_bytes
+            # Сбросить sheet_name при загрузке нового файла
+            if not _is_excel(file_name):
+                st.session_state["builder_sheet_name"] = None
+                sheet_name = None
+        # Если файл загружен, отображаем таблицу и выбираем лист Excel при необходимости
+        if file_name and file_bytes:
+            # Для Excel запрашиваем имя листа
+            if _is_excel(file_name):
+                try:
+                    sheets = _get_excel_sheets(file_bytes)
+                except Exception as exc:
+                    show_error(f"Ошибка чтения Excel: {exc}")
+                    sheets = []
+                if sheets:
+                    default_sheet = sheet_name if sheet_name in sheets else sheets[0]
+                    sheet_name = st.selectbox(
+                        "Лист Excel",
+                        options=sheets,
+                        index=sheets.index(default_sheet) if default_sheet in sheets else 0,
+                        key="_builder_sheet_select",
+                    )
+                    st.session_state["builder_sheet_name"] = sheet_name
+            # Читаем исходную таблицу для предпросмотра
+            try:
+                df_source = _read_table(file_bytes, file_name, sheet_name=sheet_name)
+                st.caption(
+                    f"Источник: `{file_name}` | Строк: {len(df_source)} | Колонок: {len(df_source.columns)}"
+                )
+                st.dataframe(df_source.head(20), use_container_width=True)
+            except Exception as exc:
+                show_error(f"Ошибка чтения таблицы: {exc}")
+                df_source = None
+            # Кнопка "Далее" активна только если данные успешно прочитаны
+            col_prev, col_next = st.columns([1, 1])
+            with col_prev:
+                pass  # На первом шаге кнопка "Назад" не нужна
+            with col_next:
+                if st.button("Далее", type="primary", use_container_width=True):
+                    if df_source is None:
+                        show_error("Сначала исправьте ошибки чтения файла.")
+                    else:
+                        st.session_state["builder_step"] = 2
+                        st.experimental_rerun()
+        else:
+            show_info("Загрузите таблицу, чтобы продолжить.")
         return
-    if _is_excel(file_name):
-        sheets = _get_excel_sheets(file_bytes)
-        default_sheet = sheet_name if sheet_name in sheets else sheets[0]
-        sheet_name = st.selectbox("Лист Excel", options=sheets, index=sheets.index(default_sheet))
-        st.session_state["builder_sheet_name"] = sheet_name
-    else:
-        sheet_name = None
-    try:
-        df_source = _read_table(file_bytes, file_name, sheet_name=sheet_name)
-    except Exception as exc:
-        show_error(f"Ошибка чтения таблицы: {exc}")
+    # Шаг 2: Назначение типов колонок
+    if current_step == 2:
+        st.header("Шаг 2: Назначение типов колонок")
+        # Если файл не загружен, возвращаемся к шагу 1
+        if not file_name or not file_bytes:
+            show_info("Сначала загрузите файл на предыдущем шаге.")
+            if st.button("Назад", use_container_width=True):
+                st.session_state["builder_step"] = 1
+                st.experimental_rerun()
+            return
+        # Загружаем исходную таблицу (повторяем чтение при необходимости)
+        try:
+            df_source = _read_table(file_bytes, file_name, sheet_name=sheet_name)
+        except Exception as exc:
+            show_error(f"Ошибка чтения таблицы: {exc}")
+            if st.button("Назад", use_container_width=True):
+                st.session_state["builder_step"] = 1
+                st.experimental_rerun()
+            return
+        columns = [str(col) for col in df_source.columns]
+        auto = _auto_mapping(columns)
+        # Получаем ранее выбранные мэппинги, если есть
+        active_mapping = builder_mapping if builder_mapping else {}
+        search_default = [c for c in active_mapping.get("search_cols", auto.get("search_cols", [])) if c in columns]
+        filter_default = [c for c in active_mapping.get("filter_cols", auto.get("filter_cols", [])) if c in columns]
+        display_default = [c for c in active_mapping.get("display_cols", auto.get("display_cols", [])) if c in columns]
+        comment_default = active_mapping.get("comment_col", auto.get("comment_col"))
+        # Выбор колонок
+        search_cols = st.multiselect(
+            "Колонки поиска (обязательно)",
+            options=columns,
+            default=search_default,
+            key="_builder_search_cols",
+        )
+        filter_cols = st.multiselect(
+            "Колонки фильтров (опционально)",
+            options=columns,
+            default=filter_default,
+            key="_builder_filter_cols",
+        )
+        display_cols = st.multiselect(
+            "Колонки вывода (опционально)",
+            options=columns,
+            default=display_default,
+            key="_builder_display_cols",
+        )
+        comment_options = ["<нет>"] + columns
+        if comment_default not in comment_options:
+            comment_default = "<нет>"
+        comment_col = st.selectbox(
+            "Колонка комментария",
+            options=comment_options,
+            index=comment_options.index(comment_default),
+            key="_builder_comment_col",
+        )
+        comment_col = None if comment_col == "<нет>" else comment_col
+        # Кнопки управления
+        col_prev, col_next = st.columns(2)
+        with col_prev:
+            if st.button("Назад", use_container_width=True):
+                st.session_state["builder_step"] = 1
+                st.experimental_rerun()
+        with col_next:
+            if st.button("Далее", type="primary", use_container_width=True):
+                if not search_cols:
+                    show_error("Выберите хотя бы одну колонку поиска.")
+                else:
+                    st.session_state["builder_mapping"] = {
+                        "search_cols": list(search_cols),
+                        "filter_cols": list(filter_cols),
+                        "display_cols": list(display_cols),
+                        "comment_col": comment_col,
+                    }
+                    st.session_state["builder_step"] = 3
+                    st.experimental_rerun()
         return
-    st.caption(f"Источник: `{file_name}` | Строк: {len(df_source)} | Колонок: {len(df_source.columns)}")
-    st.dataframe(df_source.head(20), use_container_width=True)
-    columns = [str(col) for col in df_source.columns]
-    active_cfg = st.session_state.get("builder_config", {})
-    active_mapping = active_cfg.get("mapping", {})
-    active_parse = active_cfg.get("parse_profile", {})
-    active_search = active_cfg.get("search", {})
-    active_ui = active_cfg.get("ui", {})
-    auto = _auto_mapping(columns)
-    file_hash = _file_hash(file_bytes)
-    st.markdown("### 2) Назначение типов колонок")
-    search_cols = st.multiselect(
-        "Колонки поиска (обязательно)",
-        options=columns,
-        default=[c for c in active_mapping.get("search_cols", auto["search_cols"]) if c in columns],
-        key=f"{file_hash}_search_cols",
-    )
-    filter_cols = st.multiselect(
-        "Колонки фильтров (опционально)",
-        options=columns,
-        default=[c for c in active_mapping.get("filter_cols", auto["filter_cols"]) if c in columns],
-        key=f"{file_hash}_filter_cols",
-    )
-    display_cols = st.multiselect(
-        "Колонки вывода (опционально)",
-        options=columns,
-        default=[c for c in active_mapping.get("display_cols", auto["display_cols"]) if c in columns],
-        key=f"{file_hash}_display_cols",
-    )
-    comment_options = ["<нет>"] + columns
-    comment_default = active_mapping.get("comment_col", auto.get("comment_col"))
-    if comment_default not in comment_options:
-        comment_default = "<нет>"
-    comment_col = st.selectbox(
-        "Колонка комментария",
-        options=comment_options,
-        index=comment_options.index(comment_default),
-        key=f"{file_hash}_comment_col",
-    )
-    comment_col = None if comment_col == "<нет>" else comment_col
-    st.markdown("### 3) Параметры разбиения")
-    merged_parse_profile = _merge_parse_profile(active_parse)
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.markdown("**Поисковые колонки**")
-        search_split_newline = st.checkbox(
-            "split `\\n`",
-            value=merged_parse_profile["search"].get("split_newline", True),
-            key=f"{file_hash}_search_split_newline",
+    # Шаг 3: Настройки разбиения и поиска
+    if current_step == 3:
+        st.header("Шаг 3: Настройки разбиения и поиска")
+        # Проверяем наличие мэппинга
+        if not builder_mapping or not builder_mapping.get("search_cols"):
+            show_error("Назначьте типы колонок на предыдущем шаге.")
+            if st.button("Назад", use_container_width=True):
+                st.session_state["builder_step"] = 2
+                st.experimental_rerun()
+            return
+        # Загружаем активные настройки, если они были сохранены
+        active_parse = {}
+        active_search = {}
+        active_ui = {}
+        project_name_default = st.session_state.get("active_project_name", "Новый проект")
+        if builder_settings:
+            active_parse = builder_settings.get("parse_profile", {})
+            active_search = builder_settings.get("search", {})
+            active_ui = builder_settings.get("ui", {})
+            project_name_default = builder_settings.get("project_name", project_name_default)
+        # Раздел "Параметры разбиения"
+        st.subheader("3.1 Разбиение поисковых и фильтровых колонок")
+        merged_parse_profile = _merge_parse_profile(active_parse)
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown("**Поисковые колонки**")
+            search_split_newline = st.checkbox(
+                "split `\\n`",
+                value=merged_parse_profile["search"].get("split_newline", True),
+                key="_builder_search_split_newline",
+            )
+            search_split_pipe = st.checkbox(
+                "split `|`",
+                value=merged_parse_profile["search"].get("split_pipe", True),
+                key="_builder_search_split_pipe",
+            )
+            search_split_slash = st.checkbox(
+                "split `/`",
+                value=merged_parse_profile["search"].get("split_slash", True),
+                key="_builder_search_split_slash",
+            )
+        with col_b:
+            st.markdown("**Фильтровые колонки**")
+            filter_split_newline = st.checkbox(
+                "split `\\n` (filter)",
+                value=merged_parse_profile["filter"].get("split_newline", True),
+                key="_builder_filter_split_newline",
+            )
+            filter_split_pipe = st.checkbox(
+                "split `|` (filter)",
+                value=merged_parse_profile["filter"].get("split_pipe", True),
+                key="_builder_filter_split_pipe",
+            )
+        # Раздел "Настройки поиска и UI"
+        st.subheader("3.2 Настройки поиска и интерфейса")
+        col_c, col_d = st.columns(2)
+        with col_c:
+            semantic_top_k = st.number_input(
+                "top_k (semantic)",
+                min_value=1,
+                max_value=200,
+                value=int(active_search.get("semantic_top_k", 5)),
+                step=1,
+                key="_builder_semantic_top_k",
+            )
+            semantic_threshold = st.slider(
+                "threshold (semantic)",
+                min_value=0.0,
+                max_value=1.0,
+                value=float(active_search.get("semantic_threshold", 0.5)),
+                step=0.01,
+                key="_builder_semantic_threshold",
+            )
+            semantic_deduplicate = st.checkbox(
+                "Удалять дубли (semantic)",
+                value=bool(active_search.get("semantic_deduplicate", True)),
+                key="_builder_semantic_deduplicate",
+            )
+            enable_keyword = st.checkbox(
+                "Разрешить точный поиск",
+                value=bool(active_search.get("enable_keyword", True)),
+                key="_builder_enable_keyword",
+            )
+            keyword_deduplicate = st.checkbox(
+                "Удалять дубли (keyword)",
+                value=bool(active_search.get("keyword_deduplicate", True)),
+                key="_builder_keyword_deduplicate",
+                disabled=not enable_keyword,
+            )
+            mode_options = ["Умный"] if not enable_keyword else ["Умный", "Точный", "Оба"]
+            default_mode_current = active_search.get("default_mode", "Умный")
+            if default_mode_current not in mode_options:
+                default_mode_current = mode_options[0]
+            default_mode = st.selectbox(
+                "Режим поиска по умолчанию",
+                options=mode_options,
+                index=mode_options.index(default_mode_current),
+                key="_builder_default_mode",
+            )
+            apply_filters_to_search_default = st.checkbox(
+                "По умолчанию применять фильтры к поиску",
+                value=bool(active_search.get("apply_filters_to_search_default", False)),
+                key="_builder_apply_filters_to_search_default",
+            )
+        with col_d:
+            # Определяем доступные варианты заголовка карточки
+            display_cols = builder_mapping.get("display_cols", [])
+            title_options = ["phrase"] + display_cols
+            current_title = active_ui.get("title_column", "phrase")
+            if current_title not in title_options:
+                current_title = title_options[0]
+            title_column = st.selectbox(
+                "Заголовок карточки",
+                options=title_options,
+                index=title_options.index(current_title),
+                key="_builder_title_column",
+            )
+            show_filters = st.checkbox(
+                "Показывать фильтры",
+                value=bool(active_ui.get("show_filters", True)),
+                key="_builder_show_filters",
+            )
+            show_comment = st.checkbox(
+                "Показывать комментарий",
+                value=bool(active_ui.get("show_comment", True)),
+                key="_builder_show_comment",
+            )
+            show_matched_phrase = st.checkbox(
+                "Показывать match-фразу",
+                value=bool(active_ui.get("show_matched_phrase", True)),
+                key="_builder_show_matched_phrase",
+            )
+        project_name = st.text_input(
+            "Имя проекта",
+            value=project_name_default,
+            key="_builder_project_name",
         )
-        search_split_pipe = st.checkbox(
-            "split `|`",
-            value=merged_parse_profile["search"].get("split_pipe", True),
-            key=f"{file_hash}_search_split_pipe",
-        )
-        search_split_slash = st.checkbox(
-            "split `/`",
-            value=merged_parse_profile["search"].get("split_slash", True),
-            key=f"{file_hash}_search_split_slash",
-        )
-    with col_b:
-        st.markdown("**Фильтровые колонки**")
-        filter_split_newline = st.checkbox(
-            "split `\\n` (filter)",
-            value=merged_parse_profile["filter"].get("split_newline", True),
-            key=f"{file_hash}_filter_split_newline",
-        )
-        filter_split_pipe = st.checkbox(
-            "split `|` (filter)",
-            value=merged_parse_profile["filter"].get("split_pipe", True),
-            key=f"{file_hash}_filter_split_pipe",
-        )
-    st.markdown("### 4) Настройки поиска и UI")
-    col_c, col_d = st.columns(2)
-    with col_c:
-        semantic_top_k = st.number_input(
-            "top_k (semantic)",
-            min_value=1,
-            max_value=200,
-            value=int(active_search.get("semantic_top_k", 5)),
-            step=1,
-            key=f"{file_hash}_semantic_top_k",
-        )
-        semantic_threshold = st.slider(
-            "threshold (semantic)",
-            min_value=0.0,
-            max_value=1.0,
-            value=float(active_search.get("semantic_threshold", 0.5)),
-            step=0.01,
-            key=f"{file_hash}_semantic_threshold",
-        )
-        semantic_deduplicate = st.checkbox(
-            "Удалять дубли (semantic)",
-            value=bool(active_search.get("semantic_deduplicate", True)),
-            key=f"{file_hash}_semantic_deduplicate",
-        )
-        enable_keyword = st.checkbox(
-            "Разрешить точный поиск",
-            value=bool(active_search.get("enable_keyword", True)),
-            key=f"{file_hash}_enable_keyword",
-        )
-        keyword_deduplicate = st.checkbox(
-            "Удалять дубли (keyword)",
-            value=bool(active_search.get("keyword_deduplicate", True)),
-            key=f"{file_hash}_keyword_deduplicate",
-            disabled=not enable_keyword,
-        )
-        mode_options = ["Умный"] if not enable_keyword else ["Умный", "Точный", "Оба"]
-        default_mode_current = active_search.get("default_mode", "Умный")
-        if default_mode_current not in mode_options:
-            default_mode_current = mode_options[0]
-        default_mode = st.selectbox(
-            "Режим поиска по умолчанию",
-            options=mode_options,
-            index=mode_options.index(default_mode_current),
-            key=f"{file_hash}_default_mode",
-        )
-        apply_filters_to_search_default = st.checkbox(
-            "По умолчанию применять фильтры к поиску",
-            value=bool(active_search.get("apply_filters_to_search_default", False)),
-            key=f"{file_hash}_apply_filters_to_search_default",
-        )
-    with col_d:
-        title_options = ["phrase"] + display_cols
-        current_title = active_ui.get("title_column", "phrase")
-        if current_title not in title_options:
-            current_title = title_options[0]
-        title_column = st.selectbox(
-            "Заголовок карточки",
-            options=title_options,
-            index=title_options.index(current_title),
-            key=f"{file_hash}_title_column",
-        )
-        show_filters = st.checkbox(
-            "Показывать фильтры",
-            value=bool(active_ui.get("show_filters", True)),
-            key=f"{file_hash}_show_filters",
-        )
-        show_comment = st.checkbox(
-            "Показывать комментарий",
-            value=bool(active_ui.get("show_comment", True)),
-            key=f"{file_hash}_show_comment",
-        )
-        show_matched_phrase = st.checkbox(
-            "Показывать match-фразу",
-            value=bool(active_ui.get("show_matched_phrase", True)),
-            key=f"{file_hash}_show_matched_phrase",
-        )
-    parse_profile = {
-        "search": {
-            "split_newline": search_split_newline,
-            "split_pipe": search_split_pipe,
-            "split_slash": search_split_slash,
-        },
-        "filter": {
-            "split_newline": filter_split_newline,
-            "split_pipe": filter_split_pipe,
-        },
-    }
-    mapping = {
-        "search_cols": search_cols,
-        "filter_cols": filter_cols,
-        "display_cols": display_cols,
-        "comment_col": comment_col,
-    }
-    search_cfg = {
-        "semantic_top_k": int(semantic_top_k),
-        "semantic_threshold": float(semantic_threshold),
-        "semantic_deduplicate": bool(semantic_deduplicate),
-        "enable_keyword": bool(enable_keyword),
-        "keyword_deduplicate": bool(keyword_deduplicate),
-        "default_mode": default_mode,
-        "apply_filters_to_search_default": bool(apply_filters_to_search_default),
-    }
-    ui_cfg = {
-        "title_column": title_column,
-        "show_filters": bool(show_filters),
-        "show_comment": bool(show_comment),
-        "show_matched_phrase": bool(show_matched_phrase),
-    }
-    project_name_default = st.session_state.get("active_project_name", "Новый проект")
-    project_name = st.text_input("Имя проекта", value=project_name_default, key=f"{file_hash}_project_name")
-    config = _build_config(
-        project_name=project_name,
-        mapping=mapping,
-        parse_profile=parse_profile,
-        search_cfg=search_cfg,
-        ui_cfg=ui_cfg,
-    )
-    col_e, col_f, col_g = st.columns(3)
-    with col_e:
-        if st.button("Собрать предпросмотр", type="primary", use_container_width=True):
-            if not mapping["search_cols"]:
-                show_error("Нужно выбрать хотя бы одну колонку поиска.")
-            else:
-                st.session_state["builder_config"] = config
+        # Кнопки управления
+        col_prev, col_next = st.columns(2)
+        with col_prev:
+            if st.button("Назад", use_container_width=True):
+                st.session_state["builder_step"] = 2
+                st.experimental_rerun()
+        with col_next:
+            if st.button("Далее", type="primary", use_container_width=True):
+                # Сохраняем настройки в session_state
+                st.session_state["builder_settings"] = {
+                    "project_name": project_name,
+                    "parse_profile": {
+                        "search": {
+                            "split_newline": bool(search_split_newline),
+                            "split_pipe": bool(search_split_pipe),
+                            "split_slash": bool(search_split_slash),
+                        },
+                        "filter": {
+                            "split_newline": bool(filter_split_newline),
+                            "split_pipe": bool(filter_split_pipe),
+                        },
+                    },
+                    "search": {
+                        "semantic_top_k": int(semantic_top_k),
+                        "semantic_threshold": float(semantic_threshold),
+                        "semantic_deduplicate": bool(semantic_deduplicate),
+                        "enable_keyword": bool(enable_keyword),
+                        "keyword_deduplicate": bool(keyword_deduplicate),
+                        "default_mode": default_mode,
+                        "apply_filters_to_search_default": bool(apply_filters_to_search_default),
+                    },
+                    "ui": {
+                        "title_column": title_column,
+                        "show_filters": bool(show_filters),
+                        "show_comment": bool(show_comment),
+                        "show_matched_phrase": bool(show_matched_phrase),
+                    },
+                }
                 st.session_state["active_project_name"] = project_name
-                show_success("Конфигурация применена. Откройте вкладку «Предпросмотр».")
-    with col_f:
-        if st.button("Сохранить проект", use_container_width=True):
-            if not mapping["search_cols"]:
-                show_error("Нельзя сохранить проект без search-колонок.")
-            else:
+                st.session_state["builder_step"] = 4
+                st.experimental_rerun()
+        return
+    # Шаг 4: Предпросмотр и поиск
+    if current_step == 4:
+        st.header("Шаг 4: Предпросмотр и поиск")
+        # Проверяем, что файл и настройки есть
+        if not file_name or not file_bytes or not builder_mapping or not builder_settings:
+            show_error("Для предпросмотра необходимо выполнить предыдущие шаги.")
+            if st.button("Назад", use_container_width=True):
+                st.session_state["builder_step"] = 3
+                st.experimental_rerun()
+            return
+        # Собираем конфигурацию проекта
+        project_name = builder_settings.get("project_name", "Проект")
+        parse_profile = builder_settings.get("parse_profile", {})
+        search_cfg = builder_settings.get("search", {})
+        ui_cfg = builder_settings.get("ui", {})
+        config = _build_config(
+            project_name=project_name,
+            mapping=builder_mapping,
+            parse_profile=parse_profile,
+            search_cfg=search_cfg,
+            ui_cfg=ui_cfg,
+        )
+        # Сохраняем активную конфигурацию в session_state для быстрого доступа
+        st.session_state["builder_config"] = config
+        # Кнопки сохранения и загрузки
+        col_prev, col_save, col_download = st.columns([1, 1, 1])
+        with col_prev:
+            if st.button("Назад", use_container_width=True):
+                st.session_state["builder_step"] = 3
+                st.experimental_rerun()
+        with col_save:
+            if st.button("Сохранить проект", use_container_width=True):
                 try:
                     _save_project(
                         project_name=project_name,
@@ -1219,14 +1437,20 @@ def _render_builder():
                     show_error(f"Не удалось сохранить проект: {exc}")
                 else:
                     show_success("Проект сохранен.")
-    with col_g:
-        st.download_button(
-            "Скачать config JSON",
-            data=json.dumps(config, ensure_ascii=False, indent=2),
-            file_name=f"{_slugify(project_name)}.json",
-            mime="application/json",
-            use_container_width=True,
-        )
+        with col_download:
+            st.download_button(
+                "Скачать config JSON",
+                data=json.dumps(config, ensure_ascii=False, indent=2),
+                file_name=f"{_slugify(project_name)}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+        # Выводим предпросмотр
+        try:
+            _render_preview(config, file_name, file_bytes, sheet_name)
+        except Exception as exc:
+            show_error(f"Ошибка предпросмотра: {exc}")
+        return
 
 def _render_saved_projects_panel():
     with st.sidebar:
@@ -1257,22 +1481,9 @@ if not check_password():
 _inject_custom_styles()
 st.title("Конструктор поиска по таблицам")
 st.caption(
-    "Загрузите таблицу, назначьте типы колонок и настройте логику. "
-    "Фильтр можно использовать как отдельный режим, а поиск переключать между умным и точным."
+    "Этот мастер поможет загрузить таблицу, назначить типы колонок, настроить параметры и получить предпросмотр поиска."  # fmt: off
 )
 _render_saved_projects_panel()
-tab_builder, tab_preview = st.tabs(["Конструктор", "Предпросмотр"])
-with tab_builder:
-    _render_builder()
-with tab_preview:
-    cfg = st.session_state.get("builder_config")
-    file_name = st.session_state.get("builder_file_name")
-    file_bytes = st.session_state.get("builder_file_bytes")
-    sheet_name = st.session_state.get("builder_sheet_name")
-    if not cfg or not file_name or not file_bytes:
-        show_info("Сначала настройте проект на вкладке «Конструктор».")
-    else:
-        try:
-            _render_preview(cfg, file_name, file_bytes, sheet_name)
-        except Exception as exc:
-            show_error(f"Ошибка предпросмотра: {exc}")
+
+# Отображаем пошаговый мастер
+_render_builder_wizard()
