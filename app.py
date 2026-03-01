@@ -75,6 +75,49 @@ def flatten_results_to_df(results: list[dict], include_score: bool = False) -> p
     return pd.DataFrame(rows)
 
 # -----------------------------------------------------------------------------
+#  Пользовательские уведомления
+
+def _build_alert_html(message: str, alert_type: str) -> str:
+    """
+    Возвращает HTML для уведомления с заданным типом.
+
+    alert_type может быть 'info', 'warning', 'error' или 'success'.
+    """
+    # Определяем иконку для каждого типа уведомления
+    icon_class = {
+        "info": "fa-circle-info",
+        "warning": "fa-triangle-exclamation",
+        "error": "fa-circle-xmark",
+        "success": "fa-circle-check",
+    }.get(alert_type, "fa-circle-info")
+    return (
+        f"<div class='ux-alert {alert_type}'>"
+        f"<i class='fa-solid {icon_class}'></i>"
+        f"{html.escape(message)}"
+        "</div>"
+    )
+
+
+def show_info(message: str) -> None:
+    """Отображает информационное сообщение с современной иконкой."""
+    st.markdown(_build_alert_html(message, "info"), unsafe_allow_html=True)
+
+
+def show_warning(message: str) -> None:
+    """Отображает предупреждающее сообщение с современной иконкой."""
+    st.markdown(_build_alert_html(message, "warning"), unsafe_allow_html=True)
+
+
+def show_error(message: str) -> None:
+    """Отображает сообщение об ошибке с современной иконкой."""
+    st.markdown(_build_alert_html(message, "error"), unsafe_allow_html=True)
+
+
+def show_success(message: str) -> None:
+    """Отображает успешное сообщение с современной иконкой."""
+    st.markdown(_build_alert_html(message, "success"), unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
 #  Глобальные константы и настройки
 
 PROJECTS_DIR = Path(".projects")
@@ -86,7 +129,8 @@ PROJECT_DATA_DIR = PROJECTS_DIR / "data"
 def check_password():
     expected = os.getenv("APP_PASSWORD")
     if not expected:
-        st.error("APP_PASSWORD не задан в окружении.")
+        # Показываем ошибку, если пароль не задан в окружении
+        show_error("APP_PASSWORD не задан в окружении.")
         return False
 
     if st.session_state.get("password_correct", False):
@@ -100,97 +144,128 @@ def check_password():
             st.session_state.pop("password", None)
 
     st.text_input("Пароль", type="password", key="password", on_change=password_entered)
-    st.info("После ввода верного пароля первый запуск может занять некоторое время. Пожалуйста, подождите.")
+    # Сообщение о возможной задержке
+    show_info("После ввода верного пароля первый запуск может занять некоторое время. Пожалуйста, подождите.")
     if "password_correct" in st.session_state and not st.session_state["password_correct"]:
-        st.error("Неверный пароль")
+        show_error("Неверный пароль")
     return False
 
 # -----------------------------------------------------------------------------
 #  Стили приложения
 
 def _inject_custom_styles():
+    """
+    Вставляет кастомный CSS и подключает внешние шрифты и иконки.
+
+    Этот метод загружает Google‑шрифт Inter и библиотеку Font Awesome для
+    использования современных иконок. Также задаются переменные цветов и
+    стили для карточек, чипов и сообщений.
+    """
     st.markdown(
         """
+        <!-- Подключаем Google Fonts и Font Awesome -->
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-dBwexyBdSovczvKhrcGFWUybgoRfpcpiAKzCd15oBaeRVm2U9VMC4/q3FM9pu+UciOW25SDnZ8NS52kLZMOt9g==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+
         <style>
+        /* Глобальные переменные цвета и шрифта */
         :root {
-            --ux-bg: #f2f6fc;
+            --ux-primary: #6366f1;
+            --ux-secondary: #8b5cf6;
+            --ux-bg: #f8fafc;
             --ux-surface: #ffffff;
-            --ux-text: #18212f;
-            --ux-muted: #5c6b80;
-            --ux-border: #d9e1ef;
-            --ux-chip-bg: #eef3ff;
-            --ux-chip-text: #2f4f86;
-            --ux-shadow: 0 8px 22px rgba(17, 31, 57, 0.08);
+            --ux-text: #1f2937;
+            --ux-muted: #6b7280;
+            --ux-border: #e5e7eb;
+            --ux-chip-bg: #eef2ff;
+            --ux-chip-text: #4f46e5;
+            --ux-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
         }
 
         html[data-theme="dark"] {
-            --ux-bg: #0b1322;
-            --ux-surface: #101b2f;
-            --ux-text: #e6edf8;
-            --ux-muted: #a6b5cd;
-            --ux-border: #22314a;
-            --ux-chip-bg: #1a2a45;
-            --ux-chip-text: #cadeff;
-            --ux-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+            --ux-primary: #8b5cf6;
+            --ux-secondary: #6366f1;
+            --ux-bg: #0f172a;
+            --ux-surface: #1e293b;
+            --ux-text: #f1f5f9;
+            --ux-muted: #9ca3af;
+            --ux-border: #374151;
+            --ux-chip-bg: #312e81;
+            --ux-chip-text: #a5b4fc;
+            --ux-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
         }
 
         @media (prefers-color-scheme: dark) {
             :root {
-                --ux-bg: #0b1322;
-                --ux-surface: #101b2f;
-                --ux-text: #e6edf8;
-                --ux-muted: #a6b5cd;
-                --ux-border: #22314a;
-                --ux-chip-bg: #1a2a45;
-                --ux-chip-text: #cadeff;
-                --ux-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+                --ux-primary: #8b5cf6;
+                --ux-secondary: #6366f1;
+                --ux-bg: #0f172a;
+                --ux-surface: #1e293b;
+                --ux-text: #f1f5f9;
+                --ux-muted: #9ca3af;
+                --ux-border: #374151;
+                --ux-chip-bg: #312e81;
+                --ux-chip-text: #a5b4fc;
+                --ux-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
             }
+        }
+
+        /* Основные настройки страницы */
+        html, body, [class*="css"]  {
+            font-family: 'Inter', sans-serif;
         }
 
         [data-testid="stAppViewContainer"] {
             background:
-                radial-gradient(1300px 500px at 15% -10%, rgba(88, 124, 255, 0.15), transparent 55%),
-                radial-gradient(1000px 500px at 95% 0%, rgba(44, 176, 195, 0.10), transparent 55%),
+                radial-gradient(1300px 500px at 15% -10%, rgba(99, 102, 241, 0.12), transparent 55%),
+                radial-gradient(1000px 500px at 95% 0%, rgba(139, 92, 246, 0.10), transparent 55%),
                 var(--ux-bg);
         }
 
         [data-testid="stHeader"] { background: transparent; }
         .block-container { max-width: 1180px; padding-top: 1.15rem; }
 
+        /* Стили для кнопок */
         .stButton > button, .stDownloadButton > button {
             border-radius: 12px;
             border: 1px solid var(--ux-border);
             font-weight: 600;
+            padding: 0.5rem 1rem;
+            transition: all 0.2s ease;
+        }
+        .stButton > button:hover, .stDownloadButton > button:hover {
+            border-color: var(--ux-primary);
+            color: var(--ux-primary);
         }
 
+        /* Стили для виджетов ввода */
         div[data-baseweb="select"] > div, div[data-baseweb="input"] > div, textarea {
             border-radius: 12px !important;
         }
 
+        /* Карточки результатов */
         .ux-card {
             background: var(--ux-surface);
             border: 1px solid var(--ux-border);
             border-radius: 16px;
             box-shadow: var(--ux-shadow);
-            padding: 14px 16px;
-            margin-bottom: 12px;
+            padding: 16px 18px;
+            margin-bottom: 14px;
         }
-
         .ux-card-top {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 10px;
-            margin-bottom: 8px;
+            gap: 12px;
+            margin-bottom: 10px;
         }
-
         .ux-title-wrap {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
             min-width: 0;
         }
-
         .ux-index {
             min-width: 28px;
             height: 28px;
@@ -203,7 +278,6 @@ def _inject_custom_styles():
             font-size: 12px;
             font-weight: 700;
         }
-
         .ux-title {
             color: var(--ux-text);
             font-size: 18px;
@@ -211,7 +285,6 @@ def _inject_custom_styles():
             line-height: 1.3;
             overflow-wrap: anywhere;
         }
-
         .ux-score {
             color: var(--ux-muted);
             font-size: 12px;
@@ -220,7 +293,6 @@ def _inject_custom_styles():
             padding: 5px 10px;
             white-space: nowrap;
         }
-
         .ux-kv {
             margin-top: 8px;
             display: grid;
@@ -228,7 +300,6 @@ def _inject_custom_styles():
             gap: 8px 10px;
             align-items: start;
         }
-
         .ux-k {
             color: var(--ux-muted);
             font-size: 12px;
@@ -236,20 +307,17 @@ def _inject_custom_styles():
             letter-spacing: 0.02em;
             text-transform: uppercase;
         }
-
         .ux-v {
             color: var(--ux-text);
             font-size: 14px;
             overflow-wrap: anywhere;
         }
-
         .ux-chip-row {
             margin-top: 10px;
             display: flex;
             flex-wrap: wrap;
             gap: 6px;
         }
-
         .ux-chip {
             display: inline-flex;
             align-items: center;
@@ -262,9 +330,7 @@ def _inject_custom_styles():
             font-weight: 600;
             line-height: 1.2;
         }
-
         .ux-chip.phrase { background: transparent; color: var(--ux-text); }
-
         .ux-comment {
             margin-top: 10px;
             border: 1px dashed var(--ux-border);
@@ -275,8 +341,50 @@ def _inject_custom_styles():
             line-height: 1.45;
             overflow-wrap: anywhere;
         }
-
         .ux-subsection { margin-top: 20px; }
+
+        /* Стили для пользовательских уведомлений */
+        .ux-alert {
+            display: flex;
+            align-items: center;
+            border-radius: 12px;
+            padding: 12px 16px;
+            margin: 10px 0;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .ux-alert i {
+            margin-right: 8px;
+            font-size: 16px;
+        }
+        .ux-alert.info {
+            background-color: rgba(99, 102, 241, 0.1);
+            color: var(--ux-text);
+        }
+        .ux-alert.info i {
+            color: var(--ux-primary);
+        }
+        .ux-alert.warning {
+            background-color: rgba(251, 191, 36, 0.12);
+            color: #854d0e;
+        }
+        .ux-alert.warning i {
+            color: #eab308;
+        }
+        .ux-alert.error {
+            background-color: rgba(252, 165, 165, 0.12);
+            color: #b91c1c;
+        }
+        .ux-alert.error i {
+            color: #ef4444;
+        }
+        .ux-alert.success {
+            background-color: rgba(34, 197, 94, 0.12);
+            color: #166534;
+        }
+        .ux-alert.success i {
+            color: #22c55e;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -690,46 +798,40 @@ def _render_preview(config: dict, file_name: str, file_bytes: bytes, sheet_name:
         f"filter: {len(mapping['filter_cols'])}, "
         f"display: {len(mapping['display_cols'])}"
     )
-    selected_filters: dict[str, list[str]] = {}
-    filter_requested_key = f"{file_hash}_filter_requested"
     # ----------- Блок фильтров -----------
+    # Собираем выбранные значения фильтров в словарь. Если фильтры включены в настройках
+    # и есть хотя бы одна фильтровая колонка, отображаем панель фильтров в виде экспандера.
+    selected_filters: dict[str, list[str]] = {}
     if ui_cfg.get("show_filters", True) and mapping["filter_cols"]:
-        st.markdown("### Фильтр по тематикам")
-        with st.container():
+        with st.expander("Фильтр по тематикам", expanded=False):
             for col in mapping["filter_cols"]:
                 options = _collect_filter_options(df_runtime, col, parse_profile["filter"])
                 key = f"{file_hash}_filter_{col}"
                 selected_filters[col] = st.multiselect(col, options=options, key=key)
-            col_btn_show, col_btn_hide = st.columns(2)
-            if col_btn_show.button("Показать по выбранным тематикам", use_container_width=True):
-                st.session_state[filter_requested_key] = True
-            if col_btn_hide.button("Скрыть блок фильтра", use_container_width=True):
-                st.session_state[filter_requested_key] = False
-        if st.session_state.get(filter_requested_key, False):
-            st.markdown("<div class='ux-subsection'></div>", unsafe_allow_html=True)
-            st.markdown("### Результаты фильтра")
-            if not _has_filter_selection(selected_filters):
-                st.info("Выберите хотя бы одну тематику и нажмите кнопку фильтра.")
-            else:
-                groups = _build_filter_groups(
-                    df_runtime,
-                    mapping,
-                    selected_filters,
-                    parse_profile["filter"],
+
+    # Если выбраны хотя бы какие‑то фильтры, отображаем результаты фильтрации
+    if mapping["filter_cols"] and _has_filter_selection(selected_filters):
+        st.markdown("<div class='ux-subsection'></div>", unsafe_allow_html=True)
+        st.markdown("### Результаты фильтра")
+        groups = _build_filter_groups(
+            df_runtime,
+            mapping,
+            selected_filters,
+            parse_profile["filter"],
+        )
+        if groups:
+            for idx, group in enumerate(groups, start=1):
+                _render_filter_group_card(
+                    group_item=group,
+                    idx=idx,
+                    title_column=ui_cfg.get("title_column", "phrase"),
+                    show_comment=bool(ui_cfg.get("show_comment", True)),
+                    display_cols=mapping["display_cols"],
+                    filter_cols=mapping["filter_cols"],
+                    filter_profile=parse_profile["filter"],
                 )
-                if groups:
-                    for idx, group in enumerate(groups, start=1):
-                        _render_filter_group_card(
-                            group_item=group,
-                            idx=idx,
-                            title_column=ui_cfg.get("title_column", "phrase"),
-                            show_comment=bool(ui_cfg.get("show_comment", True)),
-                            display_cols=mapping["display_cols"],
-                            filter_cols=mapping["filter_cols"],
-                            filter_profile=parse_profile["filter"],
-                        )
-                else:
-                    st.warning("По выбранным тематикам ничего не найдено.")
+        else:
+            show_warning("По выбранным тематикам ничего не найдено.")
     # ----------- Блок поиска -----------
     st.markdown("<div class='ux-subsection'></div>", unsafe_allow_html=True)
     st.markdown("### Поиск")
@@ -757,13 +859,21 @@ def _render_preview(config: dict, file_name: str, file_bytes: bytes, sheet_name:
     query_key = f"{file_hash}_query_input"
     last_query_key = f"{file_hash}_last_query"
     with st.form(key=f"{file_hash}_search_form"):
-        query_input = st.text_input("Введите запрос", key=query_key)
+        # Кастомный поисковый инпут с иконкой поиска
+        search_icon_col, search_input_col = st.columns([1, 9])
+        with search_icon_col:
+            st.markdown(
+                "<i class='fa-solid fa-magnifying-glass' style='font-size:20px; color: var(--ux-muted); padding-top: 0.5rem;'></i>",
+                unsafe_allow_html=True,
+            )
+        with search_input_col:
+            query_input = st.text_input("", placeholder="Введите запрос", key=query_key)
         submitted = st.form_submit_button("Найти", use_container_width=True)
     if submitted:
         st.session_state[last_query_key] = query_input.strip()
     query = st.session_state.get(last_query_key, "").strip()
     if not query:
-        st.info("Введите запрос и нажмите «Найти».")
+        show_info("Введите запрос и нажмите «Найти».")
         return
     # Выводим активные фильтры, если они выбраны
     if _has_filter_selection(selected_filters):
@@ -820,7 +930,7 @@ def _render_preview(config: dict, file_name: str, file_bytes: bytes, sheet_name:
                     mime="text/csv",
                 )
         else:
-            st.warning("Совпадений не найдено.")
+            show_warning("Совпадений не найдено.")
     # ------------- Точный поиск -------------
     if allow_keyword and search_mode in ("Точный", "Оба"):
         keyword_results = keyword_search_rows(
@@ -863,7 +973,7 @@ def _render_preview(config: dict, file_name: str, file_bytes: bytes, sheet_name:
                     mime="text/csv",
                 )
         else:
-            st.info("Совпадений в точном поиске нет.")
+            show_info("Совпадений в точном поиске нет.")
 
 def _render_builder():
     st.markdown("### 1) Загрузка таблицы")
@@ -880,7 +990,7 @@ def _render_builder():
             st.session_state["builder_sheet_name"] = None
             sheet_name = None
     if not file_name or not file_bytes:
-        st.info("Загрузите таблицу, чтобы открыть визуальный конструктор.")
+        show_info("Загрузите таблицу, чтобы открыть визуальный конструктор.")
         return
     if _is_excel(file_name):
         sheets = _get_excel_sheets(file_bytes)
@@ -892,7 +1002,7 @@ def _render_builder():
     try:
         df_source = _read_table(file_bytes, file_name, sheet_name=sheet_name)
     except Exception as exc:
-        st.error(f"Ошибка чтения таблицы: {exc}")
+        show_error(f"Ошибка чтения таблицы: {exc}")
         return
     st.caption(f"Источник: `{file_name}` | Строк: {len(df_source)} | Колонок: {len(df_source.columns)}")
     st.dataframe(df_source.head(20), use_container_width=True)
@@ -1087,15 +1197,15 @@ def _render_builder():
     with col_e:
         if st.button("Собрать предпросмотр", type="primary", use_container_width=True):
             if not mapping["search_cols"]:
-                st.error("Нужно выбрать хотя бы одну колонку поиска.")
+                show_error("Нужно выбрать хотя бы одну колонку поиска.")
             else:
                 st.session_state["builder_config"] = config
                 st.session_state["active_project_name"] = project_name
-                st.success("Конфигурация применена. Откройте вкладку «Предпросмотр».")
+                show_success("Конфигурация применена. Откройте вкладку «Предпросмотр».")
     with col_f:
         if st.button("Сохранить проект", use_container_width=True):
             if not mapping["search_cols"]:
-                st.error("Нельзя сохранить проект без search-колонок.")
+                show_error("Нельзя сохранить проект без search-колонок.")
             else:
                 try:
                     _save_project(
@@ -1106,9 +1216,9 @@ def _render_builder():
                         config=config,
                     )
                 except Exception as exc:
-                    st.error(f"Не удалось сохранить проект: {exc}")
+                    show_error(f"Не удалось сохранить проект: {exc}")
                 else:
-                    st.success("Проект сохранен.")
+                    show_success("Проект сохранен.")
     with col_g:
         st.download_button(
             "Скачать config JSON",
@@ -1131,7 +1241,7 @@ def _render_saved_projects_panel():
             try:
                 payload, file_bytes = _load_saved_project(options[selected])
             except Exception as exc:
-                st.error(f"Ошибка загрузки проекта: {exc}")
+                show_error(f"Ошибка загрузки проекта: {exc}")
                 return
             source = payload.get("source", {})
             st.session_state["builder_file_name"] = source.get("file_name")
@@ -1139,7 +1249,7 @@ def _render_saved_projects_panel():
             st.session_state["builder_sheet_name"] = source.get("sheet_name")
             st.session_state["builder_config"] = payload.get("config", {})
             st.session_state["active_project_name"] = payload.get("project_name", selected)
-            st.success(f"Проект «{selected}» загружен.")
+            show_success(f"Проект «{selected}» загружен.")
 
 st.set_page_config(page_title="Конструктор поиска по таблицам", layout="wide")
 if not check_password():
@@ -1160,9 +1270,9 @@ with tab_preview:
     file_bytes = st.session_state.get("builder_file_bytes")
     sheet_name = st.session_state.get("builder_sheet_name")
     if not cfg or not file_name or not file_bytes:
-        st.info("Сначала настройте проект на вкладке «Конструктор».")
+        show_info("Сначала настройте проект на вкладке «Конструктор».")
     else:
         try:
             _render_preview(cfg, file_name, file_bytes, sheet_name)
         except Exception as exc:
-            st.error(f"Ошибка предпросмотра: {exc}")
+            show_error(f"Ошибка предпросмотра: {exc}")
