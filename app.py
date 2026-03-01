@@ -1134,7 +1134,7 @@ def _render_builder_wizard() -> None:
                         show_error("Сначала исправьте ошибки чтения файла.")
                     else:
                         st.session_state["builder_step"] = 2
-                        st.experimental_rerun()
+                        # Изменение шага мастер сохранится в st.session_state. Streamlit перезапустит скрипт автоматически.
         else:
             show_info("Загрузите таблицу, чтобы продолжить.")
         return
@@ -1146,7 +1146,6 @@ def _render_builder_wizard() -> None:
             show_info("Сначала загрузите файл на предыдущем шаге.")
             if st.button("Назад", use_container_width=True):
                 st.session_state["builder_step"] = 1
-                st.experimental_rerun()
             return
         # Загружаем исходную таблицу (повторяем чтение при необходимости)
         try:
@@ -1155,7 +1154,6 @@ def _render_builder_wizard() -> None:
             show_error(f"Ошибка чтения таблицы: {exc}")
             if st.button("Назад", use_container_width=True):
                 st.session_state["builder_step"] = 1
-                st.experimental_rerun()
             return
         columns = [str(col) for col in df_source.columns]
         auto = _auto_mapping(columns)
@@ -1198,8 +1196,8 @@ def _render_builder_wizard() -> None:
         col_prev, col_next = st.columns(2)
         with col_prev:
             if st.button("Назад", use_container_width=True):
+                # Переход на предыдущий шаг без явного перезапуска: Streamlit перерисует страницу автоматически
                 st.session_state["builder_step"] = 1
-                st.experimental_rerun()
         with col_next:
             if st.button("Далее", type="primary", use_container_width=True):
                 if not search_cols:
@@ -1212,7 +1210,6 @@ def _render_builder_wizard() -> None:
                         "comment_col": comment_col,
                     }
                     st.session_state["builder_step"] = 3
-                    st.experimental_rerun()
         return
     # Шаг 3: Настройки разбиения и поиска
     if current_step == 3:
@@ -1221,8 +1218,8 @@ def _render_builder_wizard() -> None:
         if not builder_mapping or not builder_mapping.get("search_cols"):
             show_error("Назначьте типы колонок на предыдущем шаге.")
             if st.button("Назад", use_container_width=True):
+                # Возврат к шагу 2
                 st.session_state["builder_step"] = 2
-                st.experimental_rerun()
             return
         # Загружаем активные настройки, если они были сохранены
         active_parse = {}
@@ -1356,7 +1353,6 @@ def _render_builder_wizard() -> None:
         with col_prev:
             if st.button("Назад", use_container_width=True):
                 st.session_state["builder_step"] = 2
-                st.experimental_rerun()
         with col_next:
             if st.button("Далее", type="primary", use_container_width=True):
                 # Сохраняем настройки в session_state
@@ -1391,7 +1387,6 @@ def _render_builder_wizard() -> None:
                 }
                 st.session_state["active_project_name"] = project_name
                 st.session_state["builder_step"] = 4
-                st.experimental_rerun()
         return
     # Шаг 4: Предпросмотр и поиск
     if current_step == 4:
@@ -1401,7 +1396,6 @@ def _render_builder_wizard() -> None:
             show_error("Для предпросмотра необходимо выполнить предыдущие шаги.")
             if st.button("Назад", use_container_width=True):
                 st.session_state["builder_step"] = 3
-                st.experimental_rerun()
             return
         # Собираем конфигурацию проекта
         project_name = builder_settings.get("project_name", "Проект")
@@ -1422,7 +1416,6 @@ def _render_builder_wizard() -> None:
         with col_prev:
             if st.button("Назад", use_container_width=True):
                 st.session_state["builder_step"] = 3
-                st.experimental_rerun()
         with col_save:
             if st.button("Сохранить проект", use_container_width=True):
                 try:
