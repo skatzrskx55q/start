@@ -17,10 +17,71 @@ from utils import (
     semantic_search_rows,
 )
 
+# -----------------------------------------------------------------------------
+#  Вспомогательные функции
+#
+#  Функция `highlight_terms` подсвечивает совпадения слов из запроса в строке,
+#  оборачивая их тегом <mark>. Она используется при отрисовке карточек с
+#  результатами, чтобы выделять найденные слова и повышать читаемость.
+
+def highlight_terms(text: str, query: str) -> str:
+    """Возвращает HTML‑строку с подсветкой слов из запроса.
+
+    Каждое слово из query (разделитель — пробел) ищется в text и
+    оборачивается тегом <mark>. Регистр игнорируется. При отсутствии
+    запроса возвращается HTML‑экранированный исходный текст.
+    """
+    text = str(text)
+    query = query.strip()
+    if not query:
+        return html.escape(text)
+    # Разбиваем запрос на слова и экранируем для составления regex
+    words = [re.escape(w) for w in query.split() if w]
+    if not words:
+        return html.escape(text)
+    pattern = re.compile("|".join(words), re.IGNORECASE)
+    parts = []
+    last_end = 0
+    for m in pattern.finditer(text):
+        # Экранируем текст между совпадениями
+        parts.append(html.escape(text[last_end:m.start()]))
+        # Оборачиваем совпадение
+        parts.append(f"<mark>{html.escape(m.group(0))}</mark>")
+        last_end = m.end()
+    parts.append(html.escape(text[last_end:]))
+    return "".join(parts)
+
+# Функция для разворачивания результатов поиска в таблицу
+def flatten_results_to_df(results: list[dict], include_score: bool = False) -> pd.DataFrame:
+    """Преобразует список результатов в DataFrame.
+
+    Аргумент include_score указывает, добавлять ли колонку score. Словари
+    `displays` и `filters` разворачиваются в отдельные колонки.
+    """
+    rows = []
+    for item in results:
+        row: dict[str, object] = {}
+        if include_score and "score" in item:
+            row["score"] = item.get("score", 0.0)
+        row["phrase"] = item.get("phrase", "")
+        # Разворачиваем отображаемые колонки
+        for col, val in item.get("displays", {}).items():
+            row[col] = val
+        # Разворачиваем фильтровые колонки
+        for col, val in item.get("filters", {}).items():
+            row[col] = val
+        row["comment"] = item.get("comment", "")
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+# -----------------------------------------------------------------------------
+#  Глобальные константы и настройки
 
 PROJECTS_DIR = Path(".projects")
 PROJECT_DATA_DIR = PROJECTS_DIR / "data"
 
+# -----------------------------------------------------------------------------
+#  Аутентификация
 
 def check_password():
     expected = os.getenv("APP_PASSWORD")
@@ -44,6 +105,8 @@ def check_password():
         st.error("Неверный пароль")
     return False
 
+# -----------------------------------------------------------------------------
+#  Стили приложения
 
 def _inject_custom_styles():
     st.markdown(
@@ -219,59 +282,51 @@ def _inject_custom_styles():
         unsafe_allow_html=True,
     )
 
+# -----------------------------------------------------------------------------
+#  Вспомогательные утилиты для фильтров и мэппинга
 
 def _slugify(value):
     slug = re.sub(r"[^A-Za-z0-9_-]+", "_", str(value)).strip("_")
     return slug or "project"
 
-
-def _file_hash(file_bytes):
+def _file_hash(file_bytes: bytes) -> str:
     return hashlib.sha256(file_bytes).hexdigest()
 
-
-def _is_excel(file_name):
+def _is_excel(file_name: str) -> bool:
     return Path(file_name).suffix.lower() in {".xlsx", ".xlsm", ".xls"}
 
-
 @st.cache_data(show_spinner=False)
-def _get_excel_sheets(file_bytes):
+def _get_excel_sheets(file_bytes: bytes):
     xls = pd.ExcelFile(io.BytesIO(file_bytes))
     return xls.sheet_names
 
-
 @st.cache_data(show_spinner=False)
-def _read_table(file_bytes, file_name, sheet_name=None):
+def _read_table(file_bytes: bytes, file_name: str, sheet_name: str | None = None):
     ext = Path(file_name).suffix.lower()
     if ext in {".xlsx", ".xlsm", ".xls"}:
         target_sheet = sheet_name if sheet_name is not None else 0
         return pd.read_excel(io.BytesIO(file_bytes), sheet_name=target_sheet)
-
     if ext in {".csv", ".txt"}:
         try:
             return pd.read_csv(io.BytesIO(file_bytes), sep=None, engine="python")
         except UnicodeDecodeError:
             return pd.read_csv(io.BytesIO(file_bytes), sep=None, engine="python", encoding="cp1251")
-
     raise ValueError(f"Неподдерживаемый формат файла: {ext}")
 
-
-def _auto_prefixed_columns(columns, prefix):
+def _auto_prefixed_columns(columns: list[str], prefix: str) -> list[str]:
     pattern = re.compile(rf"^{re.escape(prefix.lower())}\d+$")
     matched = [c for c in columns if pattern.match(str(c).lower())]
     return sorted(matched, key=lambda name: int(re.findall(r"\d+$", name)[0]) if re.findall(r"\d+$", name) else 10**9)
 
-
-def _auto_mapping(columns):
+def _auto_mapping(columns: list[str]) -> dict[str, object]:
     search_cols = _auto_prefixed_columns(columns, "search")
     filter_cols = _auto_prefixed_columns(columns, "display_filter")
     display_cols = _auto_prefixed_columns(columns, "display")
     comment_cols = _auto_prefixed_columns(columns, "comment")
-
     if not search_cols and columns:
         search_cols = [columns[0]]
     if not display_cols and columns:
         display_cols = [columns[0]]
-
     return {
         "search_cols": search_cols,
         "filter_cols": filter_cols,
@@ -279,8 +334,7 @@ def _auto_mapping(columns):
         "comment_col": comment_cols[0] if comment_cols else None,
     }
 
-
-def _merge_parse_profile(overrides):
+def _merge_parse_profile(overrides: dict | None) -> dict:
     base = json.loads(json.dumps(DEFAULT_PARSE_PROFILE))
     if not overrides:
         return base
@@ -292,13 +346,12 @@ def _merge_parse_profile(overrides):
                 base[section][key] = bool(value)
     return base
 
-
-def _split_filter_values(value, split_newline=True, split_pipe=True):
+def _split_filter_values(value: str, split_newline: bool = True, split_pipe: bool = True) -> list[str]:
     text = str(value).strip()
     if not text:
         return []
     chunks = text.split("\n") if split_newline else [text]
-    result = []
+    result: list[str] = []
     for chunk in chunks:
         parts = chunk.split("|") if split_pipe else [chunk]
         for part in parts:
@@ -307,10 +360,9 @@ def _split_filter_values(value, split_newline=True, split_pipe=True):
                 result.append(part)
     return result
 
-
-def _dedup_keep_order(items):
-    seen = set()
-    ordered = []
+def _dedup_keep_order(items: list) -> list:
+    seen: set[str] = set()
+    ordered: list[str] = []
     for item in items:
         key = str(item).strip()
         if not key or key in seen:
@@ -319,9 +371,8 @@ def _dedup_keep_order(items):
         ordered.append(key)
     return ordered
 
-
-def _collect_filter_options(df_runtime, col, filter_profile):
-    options = set()
+def _collect_filter_options(df_runtime: pd.DataFrame, col: str, filter_profile: dict) -> list[str]:
+    options: set[str] = set()
     if col not in df_runtime.columns:
         return []
     for value in df_runtime[col].tolist():
@@ -333,12 +384,10 @@ def _collect_filter_options(df_runtime, col, filter_profile):
             options.add(item)
     return sorted(options)
 
-
-def _has_filter_selection(selected_filters):
+def _has_filter_selection(selected_filters: dict[str, list[str]]) -> bool:
     return any(bool(values) for values in selected_filters.values())
 
-
-def _row_matches_selected_filters(row, selected_filters, filter_profile):
+def _row_matches_selected_filters(row: pd.Series, selected_filters: dict[str, list[str]], filter_profile: dict) -> bool:
     for col, selected_values in selected_filters.items():
         if not selected_values:
             continue
@@ -352,8 +401,7 @@ def _row_matches_selected_filters(row, selected_filters, filter_profile):
             return False
     return True
 
-
-def _result_matches_filters(result, selected_filters, filter_profile):
+def _result_matches_filters(result: dict, selected_filters: dict[str, list[str]], filter_profile: dict) -> bool:
     for col, selected_values in selected_filters.items():
         if not selected_values:
             continue
@@ -367,16 +415,13 @@ def _result_matches_filters(result, selected_filters, filter_profile):
             return False
     return True
 
-
-def _safe_inline_text(value):
+def _safe_inline_text(value: object) -> str:
     return html.escape(str(value))
 
-
-def _safe_multiline_text(value):
+def _safe_multiline_text(value: object) -> str:
     return html.escape(str(value)).replace("\n", "<br>")
 
-
-def _chips_html(items, class_name="ux-chip"):
+def _chips_html(items: list[str], class_name: str = "ux-chip") -> str:
     cleaned = _dedup_keep_order(items)
     if not cleaned:
         return ""
@@ -385,9 +430,8 @@ def _chips_html(items, class_name="ux-chip"):
         for item in cleaned
     )
 
-
-def _filter_chips_from_dict(filters, filter_profile):
-    chips = []
+def _filter_chips_from_dict(filters: dict[str, str], filter_profile: dict) -> list[str]:
+    chips: list[str] = []
     for col, raw in filters.items():
         values = _split_filter_values(
             raw,
@@ -400,8 +444,7 @@ def _filter_chips_from_dict(filters, filter_profile):
             chips.append(f"{col}: {value}")
     return _dedup_keep_order(chips)
 
-
-def _build_config(project_name, mapping, parse_profile, search_cfg, ui_cfg):
+def _build_config(project_name: str, mapping: dict, parse_profile: dict, search_cfg: dict, ui_cfg: dict) -> dict:
     return {
         "project_name": project_name,
         "mapping": mapping,
@@ -410,22 +453,18 @@ def _build_config(project_name, mapping, parse_profile, search_cfg, ui_cfg):
         "ui": ui_cfg,
     }
 
-
-def _project_registry_path(project_slug):
+def _project_registry_path(project_slug: str) -> Path:
     return PROJECTS_DIR / f"{project_slug}.json"
 
-
-def _save_project(project_name, file_name, file_bytes, sheet_name, config):
+def _save_project(project_name: str, file_name: str, file_bytes: bytes, sheet_name: str | None, config: dict) -> None:
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     PROJECT_DATA_DIR.mkdir(parents=True, exist_ok=True)
-
     project_slug = _slugify(project_name)
     file_slug = _slugify(Path(file_name).stem)
     ext = Path(file_name).suffix.lower() or ".bin"
     data_file_name = f"{project_slug}__{file_slug}{ext}"
     data_path = PROJECT_DATA_DIR / data_file_name
     data_path.write_bytes(file_bytes)
-
     payload = {
         "project_name": project_name,
         "source": {
@@ -440,14 +479,12 @@ def _save_project(project_name, file_name, file_bytes, sheet_name, config):
         encoding="utf-8",
     )
 
-
-def _list_saved_projects():
+def _list_saved_projects() -> list[Path]:
     if not PROJECTS_DIR.exists():
         return []
     return sorted(PROJECTS_DIR.glob("*.json"))
 
-
-def _load_saved_project(project_manifest_path):
+def _load_saved_project(project_manifest_path: Path) -> tuple[dict, bytes]:
     payload = json.loads(project_manifest_path.read_text(encoding="utf-8"))
     source = payload.get("source", {})
     data_file = source.get("data_file")
@@ -459,14 +496,12 @@ def _load_saved_project(project_manifest_path):
     file_bytes = data_path.read_bytes()
     return payload, file_bytes
 
-
 @st.cache_resource(show_spinner=False)
-def _build_runtime_df(file_hash, file_bytes, file_name, sheet_name, config_json):
+def _build_runtime_df(file_hash: str, file_bytes: bytes, file_name: str, sheet_name: str | None, config_json: str) -> pd.DataFrame:
     _ = file_hash
     config = json.loads(config_json)
     mapping = config["mapping"]
     parse_profile = config["parse_profile"]
-
     df_source = _read_table(file_bytes, file_name, sheet_name=sheet_name)
     return prepare_runtime_dataframe(
         df_source,
@@ -477,19 +512,15 @@ def _build_runtime_df(file_hash, file_bytes, file_name, sheet_name, config_json)
         parse_profile=parse_profile,
     )
 
-
-def _build_filter_groups(df_runtime, mapping, selected_filters, filter_profile):
-    original_map = df_runtime.attrs.get("original_examples_map", {})
-    groups = {}
-
+def _build_filter_groups(df_runtime: pd.DataFrame, mapping: dict, selected_filters: dict[str, list[str]], filter_profile: dict) -> list[dict]:
+    original_map: dict[str, set] = df_runtime.attrs.get("original_examples_map", {})
+    groups: dict[str, dict] = {}
     for _, row in df_runtime.iterrows():
         if not _row_matches_selected_filters(row, selected_filters, filter_profile):
             continue
-
         original_index = str(row.get("original_index", "")).strip()
         if not original_index or original_index in groups:
             continue
-
         displays = {col: str(row.get(col, "")).strip() for col in mapping["display_cols"]}
         filters = {col: str(row.get(col, "")).strip() for col in mapping["filter_cols"]}
         comment = str(row.get("comment1", "")).strip()
@@ -497,7 +528,6 @@ def _build_filter_groups(df_runtime, mapping, selected_filters, filter_profile):
         if not all_phrases:
             phrase = str(row.get("phrase", "")).strip()
             all_phrases = [phrase] if phrase else []
-
         groups[original_index] = {
             "displays": displays,
             "filters": filters,
@@ -505,56 +535,51 @@ def _build_filter_groups(df_runtime, mapping, selected_filters, filter_profile):
             "all_phrases": all_phrases,
             "phrase": all_phrases[0] if all_phrases else "",
         }
-
     return list(groups.values())
 
-
 def _render_result_card(
-    item,
-    idx,
-    title_column,
-    show_score,
-    show_comment,
-    show_phrase,
-    display_cols,
-    filter_cols,
-    filter_profile,
+    item: dict,
+    idx: int,
+    title_column: str,
+    show_score: bool,
+    show_comment: bool,
+    show_phrase: bool,
+    display_cols: list[str],
+    filter_cols: list[str],
+    filter_profile: dict,
+    query: str = "",
 ):
     displays = item.get("displays", {})
     filters = item.get("filters", {})
     phrase = str(item.get("phrase", "")).strip()
     comment = str(item.get("comment", "")).strip()
-
     if title_column == "phrase":
-        title_text = phrase
+        raw_title = phrase
     else:
-        title_text = str(displays.get(title_column, "")).strip() or phrase
-
+        raw_title = str(displays.get(title_column, "")).strip() or phrase
+    title_html = highlight_terms(raw_title, query)
     score_html = ""
     if show_score and "score" in item:
         score_html = f"<span class='ux-score'>Релевантность: {float(item['score']):.2f}</span>"
-
-    kv_rows = []
+    kv_rows: list[str] = []
     if show_phrase and phrase:
         kv_rows.append(
-            f"<div class='ux-k'>match</div><div class='ux-v'>{_safe_multiline_text(phrase)}</div>"
+            f"<div class='ux-k'>match</div><div class='ux-v'>{highlight_terms(phrase, query)}</div>"
         )
     for col in display_cols:
         value = str(displays.get(col, "")).strip()
         if not value or col == title_column:
             continue
         kv_rows.append(
-            f"<div class='ux-k'>{_safe_inline_text(col)}</div><div class='ux-v'>{_safe_multiline_text(value)}</div>"
+            f"<div class='ux-k'>{_safe_inline_text(col)}</div><div class='ux-v'>{highlight_terms(value, query)}</div>"
         )
     kv_html = f"<div class='ux-kv'>{''.join(kv_rows)}</div>" if kv_rows else ""
-
     filter_chips = _filter_chips_from_dict(
         {col: filters.get(col, "") for col in filter_cols},
         filter_profile,
     )
     chips_html = _chips_html(filter_chips)
     chips_block = f"<div class='ux-chip-row'>{chips_html}</div>" if chips_html else ""
-
     comment_block = ""
     if show_comment and comment:
         comment_block = (
@@ -562,14 +587,13 @@ def _render_result_card(
             f"{_safe_multiline_text(comment)}"
             "</div>"
         )
-
     st.markdown(
         (
             "<div class='ux-card'>"
             "<div class='ux-card-top'>"
             "<div class='ux-title-wrap'>"
             f"<span class='ux-index'>{idx}</span>"
-            f"<div class='ux-title'>{_safe_multiline_text(title_text)}</div>"
+            f"<div class='ux-title'>{title_html}</div>"
             "</div>"
             f"{score_html}"
             "</div>"
@@ -581,29 +605,26 @@ def _render_result_card(
         unsafe_allow_html=True,
     )
 
-
 def _render_filter_group_card(
-    group_item,
-    idx,
-    title_column,
-    show_comment,
-    display_cols,
-    filter_cols,
-    filter_profile,
+    group_item: dict,
+    idx: int,
+    title_column: str,
+    show_comment: bool,
+    display_cols: list[str],
+    filter_cols: list[str],
+    filter_profile: dict,
 ):
     displays = group_item.get("displays", {})
     filters = group_item.get("filters", {})
     comment = str(group_item.get("comment", "")).strip()
     phrases = [str(v).strip() for v in group_item.get("all_phrases", []) if str(v).strip()]
-
     if title_column == "phrase":
         title_text = phrases[0] if phrases else ""
     else:
         title_text = str(displays.get(title_column, "")).strip()
     if not title_text:
         title_text = phrases[0] if phrases else "Без названия"
-
-    kv_rows = []
+    kv_rows: list[str] = []
     for col in display_cols:
         value = str(displays.get(col, "")).strip()
         if not value or col == title_column:
@@ -612,17 +633,14 @@ def _render_filter_group_card(
             f"<div class='ux-k'>{_safe_inline_text(col)}</div><div class='ux-v'>{_safe_multiline_text(value)}</div>"
         )
     kv_html = f"<div class='ux-kv'>{''.join(kv_rows)}</div>" if kv_rows else ""
-
     filter_chips = _filter_chips_from_dict(
         {col: filters.get(col, "") for col in filter_cols},
         filter_profile,
     )
     filter_chip_html = _chips_html(filter_chips)
     filter_block = f"<div class='ux-chip-row'>{filter_chip_html}</div>" if filter_chip_html else ""
-
     phrase_chip_html = _chips_html(phrases, class_name="ux-chip phrase")
     phrase_block = f"<div class='ux-chip-row'>{phrase_chip_html}</div>" if phrase_chip_html else ""
-
     comment_block = ""
     if show_comment and comment:
         comment_block = (
@@ -630,7 +648,6 @@ def _render_filter_group_card(
             f"{_safe_multiline_text(comment)}"
             "</div>"
         )
-
     st.markdown(
         (
             "<div class='ux-card'>"
@@ -649,11 +666,9 @@ def _render_filter_group_card(
         unsafe_allow_html=True,
     )
 
-
-def _render_preview(config, file_name, file_bytes, sheet_name):
+def _render_preview(config: dict, file_name: str, file_bytes: bytes, sheet_name: str | None):
     file_hash = _file_hash(file_bytes)
     config_json = json.dumps(config, ensure_ascii=False, sort_keys=True)
-
     with st.spinner("Подготовка данных для предпросмотра..."):
         df_runtime = _build_runtime_df(
             file_hash=file_hash,
@@ -662,26 +677,22 @@ def _render_preview(config, file_name, file_bytes, sheet_name):
             sheet_name=sheet_name,
             config_json=config_json,
         )
-
     mapping = config.get("mapping", {})
     parse_profile = _merge_parse_profile(config.get("parse_profile"))
     search_cfg = config.get("search", {})
     ui_cfg = config.get("ui", {})
-
     mapping.setdefault("search_cols", [])
     mapping.setdefault("filter_cols", [])
     mapping.setdefault("display_cols", [])
-
     st.caption(
         f"Строк после развертки search: {len(df_runtime)} | "
         f"search: {len(mapping['search_cols'])}, "
         f"filter: {len(mapping['filter_cols'])}, "
         f"display: {len(mapping['display_cols'])}"
     )
-
-    selected_filters = {}
+    selected_filters: dict[str, list[str]] = {}
     filter_requested_key = f"{file_hash}_filter_requested"
-
+    # ----------- Блок фильтров -----------
     if ui_cfg.get("show_filters", True) and mapping["filter_cols"]:
         st.markdown("### Фильтр по тематикам")
         with st.container():
@@ -689,13 +700,11 @@ def _render_preview(config, file_name, file_bytes, sheet_name):
                 options = _collect_filter_options(df_runtime, col, parse_profile["filter"])
                 key = f"{file_hash}_filter_{col}"
                 selected_filters[col] = st.multiselect(col, options=options, key=key)
-
             col_btn_show, col_btn_hide = st.columns(2)
             if col_btn_show.button("Показать по выбранным тематикам", use_container_width=True):
                 st.session_state[filter_requested_key] = True
             if col_btn_hide.button("Скрыть блок фильтра", use_container_width=True):
                 st.session_state[filter_requested_key] = False
-
         if st.session_state.get(filter_requested_key, False):
             st.markdown("<div class='ux-subsection'></div>", unsafe_allow_html=True)
             st.markdown("### Результаты фильтра")
@@ -721,10 +730,9 @@ def _render_preview(config, file_name, file_bytes, sheet_name):
                         )
                 else:
                     st.warning("По выбранным тематикам ничего не найдено.")
-
+    # ----------- Блок поиска -----------
     st.markdown("<div class='ux-subsection'></div>", unsafe_allow_html=True)
     st.markdown("### Поиск")
-
     allow_keyword = bool(search_cfg.get("enable_keyword", True))
     mode_options = ["Умный"]
     if allow_keyword:
@@ -732,7 +740,6 @@ def _render_preview(config, file_name, file_bytes, sheet_name):
     default_mode = search_cfg.get("default_mode", "Умный")
     if default_mode not in mode_options:
         default_mode = mode_options[0]
-
     search_mode = st.radio(
         "Режим поиска",
         options=mode_options,
@@ -740,7 +747,6 @@ def _render_preview(config, file_name, file_bytes, sheet_name):
         horizontal=True,
         key=f"{file_hash}_search_mode",
     )
-
     apply_filters_to_search = False
     if mapping["filter_cols"] and _has_filter_selection(selected_filters):
         apply_filters_to_search = st.checkbox(
@@ -748,24 +754,29 @@ def _render_preview(config, file_name, file_bytes, sheet_name):
             value=bool(search_cfg.get("apply_filters_to_search_default", False)),
             key=f"{file_hash}_apply_filters_to_search",
         )
-
     query_key = f"{file_hash}_query_input"
     last_query_key = f"{file_hash}_last_query"
-
     with st.form(key=f"{file_hash}_search_form"):
         query_input = st.text_input("Введите запрос", key=query_key)
         submitted = st.form_submit_button("Найти", use_container_width=True)
-
     if submitted:
         st.session_state[last_query_key] = query_input.strip()
-
     query = st.session_state.get(last_query_key, "").strip()
     if not query:
         st.info("Введите запрос и нажмите «Найти».")
         return
-
+    # Выводим активные фильтры, если они выбраны
+    if _has_filter_selection(selected_filters):
+        active_filter_chips: list[str] = []
+        for col, values in selected_filters.items():
+            for val in values:
+                active_filter_chips.append(f"{col}: {val}")
+        chips_html = _chips_html(active_filter_chips)
+        st.markdown("<div class='ux-subsection'></div>", unsafe_allow_html=True)
+        st.markdown("### Активные фильтры")
+        st.markdown(f"<div class='ux-chip-row'>{chips_html}</div>", unsafe_allow_html=True)
     should_apply_filters_to_search = apply_filters_to_search and _has_filter_selection(selected_filters)
-
+    # ------------- Умный поиск -------------
     if search_mode in ("Умный", "Оба"):
         semantic_results = semantic_search_rows(
             query,
@@ -783,7 +794,6 @@ def _render_preview(config, file_name, file_bytes, sheet_name):
                 for item in semantic_results
                 if _result_matches_filters(item, selected_filters, parse_profile["filter"])
             ]
-
         st.markdown("### Умный поиск")
         if semantic_results:
             for idx, item in enumerate(semantic_results, start=1):
@@ -797,10 +807,21 @@ def _render_preview(config, file_name, file_bytes, sheet_name):
                     display_cols=mapping["display_cols"],
                     filter_cols=mapping["filter_cols"],
                     filter_profile=parse_profile["filter"],
+                    query=query,
+                )
+            # Кнопка скачивания для умного поиска
+            df_sem = flatten_results_to_df(semantic_results, include_score=True)
+            if not df_sem.empty:
+                csv_sem = df_sem.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Скачать результаты умного поиска",
+                    data=csv_sem,
+                    file_name="semantic_results.csv",
+                    mime="text/csv",
                 )
         else:
             st.warning("Совпадений не найдено.")
-
+    # ------------- Точный поиск -------------
     if allow_keyword and search_mode in ("Точный", "Оба"):
         keyword_results = keyword_search_rows(
             query,
@@ -816,7 +837,6 @@ def _render_preview(config, file_name, file_bytes, sheet_name):
                 for item in keyword_results
                 if _result_matches_filters(item, selected_filters, parse_profile["filter"])
             ]
-
         st.markdown("### Точный поиск")
         if keyword_results:
             for idx, item in enumerate(keyword_results, start=1):
@@ -830,19 +850,27 @@ def _render_preview(config, file_name, file_bytes, sheet_name):
                     display_cols=mapping["display_cols"],
                     filter_cols=mapping["filter_cols"],
                     filter_profile=parse_profile["filter"],
+                    query=query,
+                )
+            # Кнопка скачивания для точного поиска
+            df_kw = flatten_results_to_df(keyword_results, include_score=False)
+            if not df_kw.empty:
+                csv_kw = df_kw.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Скачать результаты точного поиска",
+                    data=csv_kw,
+                    file_name="keyword_results.csv",
+                    mime="text/csv",
                 )
         else:
             st.info("Совпадений в точном поиске нет.")
 
-
 def _render_builder():
     st.markdown("### 1) Загрузка таблицы")
     uploaded_file = st.file_uploader("Файл данных", type=["xlsx", "xls", "xlsm", "csv", "txt"])
-
     file_name = st.session_state.get("builder_file_name")
     file_bytes = st.session_state.get("builder_file_bytes")
     sheet_name = st.session_state.get("builder_sheet_name")
-
     if uploaded_file is not None:
         file_name = uploaded_file.name
         file_bytes = uploaded_file.getvalue()
@@ -851,11 +879,9 @@ def _render_builder():
         if not _is_excel(file_name):
             st.session_state["builder_sheet_name"] = None
             sheet_name = None
-
     if not file_name or not file_bytes:
         st.info("Загрузите таблицу, чтобы открыть визуальный конструктор.")
         return
-
     if _is_excel(file_name):
         sheets = _get_excel_sheets(file_bytes)
         default_sheet = sheet_name if sheet_name in sheets else sheets[0]
@@ -863,26 +889,21 @@ def _render_builder():
         st.session_state["builder_sheet_name"] = sheet_name
     else:
         sheet_name = None
-
     try:
         df_source = _read_table(file_bytes, file_name, sheet_name=sheet_name)
     except Exception as exc:
         st.error(f"Ошибка чтения таблицы: {exc}")
         return
-
     st.caption(f"Источник: `{file_name}` | Строк: {len(df_source)} | Колонок: {len(df_source.columns)}")
     st.dataframe(df_source.head(20), use_container_width=True)
-
     columns = [str(col) for col in df_source.columns]
     active_cfg = st.session_state.get("builder_config", {})
     active_mapping = active_cfg.get("mapping", {})
     active_parse = active_cfg.get("parse_profile", {})
     active_search = active_cfg.get("search", {})
     active_ui = active_cfg.get("ui", {})
-
     auto = _auto_mapping(columns)
     file_hash = _file_hash(file_bytes)
-
     st.markdown("### 2) Назначение типов колонок")
     search_cols = st.multiselect(
         "Колонки поиска (обязательно)",
@@ -903,7 +924,7 @@ def _render_builder():
         key=f"{file_hash}_display_cols",
     )
     comment_options = ["<нет>"] + columns
-    comment_default = active_mapping.get("comment_col", auto["comment_col"])
+    comment_default = active_mapping.get("comment_col", auto.get("comment_col"))
     if comment_default not in comment_options:
         comment_default = "<нет>"
     comment_col = st.selectbox(
@@ -913,7 +934,6 @@ def _render_builder():
         key=f"{file_hash}_comment_col",
     )
     comment_col = None if comment_col == "<нет>" else comment_col
-
     st.markdown("### 3) Параметры разбиения")
     merged_parse_profile = _merge_parse_profile(active_parse)
     col_a, col_b = st.columns(2)
@@ -921,32 +941,31 @@ def _render_builder():
         st.markdown("**Поисковые колонки**")
         search_split_newline = st.checkbox(
             "split `\\n`",
-            value=merged_parse_profile["search"]["split_newline"],
+            value=merged_parse_profile["search"].get("split_newline", True),
             key=f"{file_hash}_search_split_newline",
         )
         search_split_pipe = st.checkbox(
             "split `|`",
-            value=merged_parse_profile["search"]["split_pipe"],
+            value=merged_parse_profile["search"].get("split_pipe", True),
             key=f"{file_hash}_search_split_pipe",
         )
         search_split_slash = st.checkbox(
             "split `/`",
-            value=merged_parse_profile["search"]["split_slash"],
+            value=merged_parse_profile["search"].get("split_slash", True),
             key=f"{file_hash}_search_split_slash",
         )
     with col_b:
         st.markdown("**Фильтровые колонки**")
         filter_split_newline = st.checkbox(
             "split `\\n` (filter)",
-            value=merged_parse_profile["filter"]["split_newline"],
+            value=merged_parse_profile["filter"].get("split_newline", True),
             key=f"{file_hash}_filter_split_newline",
         )
         filter_split_pipe = st.checkbox(
             "split `|` (filter)",
-            value=merged_parse_profile["filter"]["split_pipe"],
+            value=merged_parse_profile["filter"].get("split_pipe", True),
             key=f"{file_hash}_filter_split_pipe",
         )
-
     st.markdown("### 4) Настройки поиска и UI")
     col_c, col_d = st.columns(2)
     with col_c:
@@ -982,7 +1001,6 @@ def _render_builder():
             key=f"{file_hash}_keyword_deduplicate",
             disabled=not enable_keyword,
         )
-
         mode_options = ["Умный"] if not enable_keyword else ["Умный", "Точный", "Оба"]
         default_mode_current = active_search.get("default_mode", "Умный")
         if default_mode_current not in mode_options:
@@ -1024,7 +1042,6 @@ def _render_builder():
             value=bool(active_ui.get("show_matched_phrase", True)),
             key=f"{file_hash}_show_matched_phrase",
         )
-
     parse_profile = {
         "search": {
             "split_newline": search_split_newline,
@@ -1057,10 +1074,8 @@ def _render_builder():
         "show_comment": bool(show_comment),
         "show_matched_phrase": bool(show_matched_phrase),
     }
-
     project_name_default = st.session_state.get("active_project_name", "Новый проект")
     project_name = st.text_input("Имя проекта", value=project_name_default, key=f"{file_hash}_project_name")
-
     config = _build_config(
         project_name=project_name,
         mapping=mapping,
@@ -1068,7 +1083,6 @@ def _render_builder():
         search_cfg=search_cfg,
         ui_cfg=ui_cfg,
     )
-
     col_e, col_f, col_g = st.columns(3)
     with col_e:
         if st.button("Собрать предпросмотр", type="primary", use_container_width=True):
@@ -1078,7 +1092,6 @@ def _render_builder():
                 st.session_state["builder_config"] = config
                 st.session_state["active_project_name"] = project_name
                 st.success("Конфигурация применена. Откройте вкладку «Предпросмотр».")
-
     with col_f:
         if st.button("Сохранить проект", use_container_width=True):
             if not mapping["search_cols"]:
@@ -1096,7 +1109,6 @@ def _render_builder():
                     st.error(f"Не удалось сохранить проект: {exc}")
                 else:
                     st.success("Проект сохранен.")
-
     with col_g:
         st.download_button(
             "Скачать config JSON",
@@ -1106,7 +1118,6 @@ def _render_builder():
             use_container_width=True,
         )
 
-
 def _render_saved_projects_panel():
     with st.sidebar:
         st.markdown("### Проекты")
@@ -1114,7 +1125,6 @@ def _render_saved_projects_panel():
         if not manifests:
             st.caption("Сохраненных проектов пока нет.")
             return
-
         options = {path.stem: path for path in manifests}
         selected = st.selectbox("Открыть сохраненный", options=list(options.keys()))
         if st.button("Загрузить проект", use_container_width=True):
@@ -1123,7 +1133,6 @@ def _render_saved_projects_panel():
             except Exception as exc:
                 st.error(f"Ошибка загрузки проекта: {exc}")
                 return
-
             source = payload.get("source", {})
             st.session_state["builder_file_name"] = source.get("file_name")
             st.session_state["builder_file_bytes"] = file_bytes
@@ -1132,32 +1141,24 @@ def _render_saved_projects_panel():
             st.session_state["active_project_name"] = payload.get("project_name", selected)
             st.success(f"Проект «{selected}» загружен.")
 
-
 st.set_page_config(page_title="Конструктор поиска по таблицам", layout="wide")
 if not check_password():
     st.stop()
-
 _inject_custom_styles()
-
 st.title("Конструктор поиска по таблицам")
 st.caption(
     "Загрузите таблицу, назначьте типы колонок и настройте логику. "
     "Фильтр можно использовать как отдельный режим, а поиск переключать между умным и точным."
 )
-
 _render_saved_projects_panel()
-
 tab_builder, tab_preview = st.tabs(["Конструктор", "Предпросмотр"])
-
 with tab_builder:
     _render_builder()
-
 with tab_preview:
     cfg = st.session_state.get("builder_config")
     file_name = st.session_state.get("builder_file_name")
     file_bytes = st.session_state.get("builder_file_bytes")
     sheet_name = st.session_state.get("builder_sheet_name")
-
     if not cfg or not file_name or not file_bytes:
         st.info("Сначала настройте проект на вкладке «Конструктор».")
     else:
