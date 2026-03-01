@@ -11,11 +11,13 @@ import os
 from itertools import product
 from bs4 import BeautifulSoup
 
+
 def get_github_headers():
     token = os.getenv("GITHUB_TOKEN")
     if token:
         return {"Authorization": f"token {token}"}
     return {}
+
 
 # ---------- Модель и морфологический разбор ----------
 @functools.lru_cache(maxsize=1)
@@ -23,19 +25,24 @@ def get_model():
     hf_model_id = "sentence-transformers/all-MiniLM-L12-v2"
     return SentenceTransformer(hf_model_id)
 
+
 @functools.lru_cache(maxsize=1)
 def get_morph():
     return pymorphy2.MorphAnalyzer()
 
+
 def preprocess(text):
     return re.sub(r"\s+", " ", str(text).lower().strip())
+
 
 def lemmatize(word):
     return get_morph().parse(word)[0].normal_form
 
+
 @functools.lru_cache(maxsize=10000)
 def lemmatize_cached(word):
     return lemmatize(word)
+
 
 SYNONYM_GROUPS = []  # Пока пусто
 SYNONYM_DICT = {}
@@ -43,6 +50,7 @@ for group in SYNONYM_GROUPS:
     lemmas = {lemmatize(w.lower()) for w in group}
     for lemma in lemmas:
         SYNONYM_DICT[lemma] = lemmas
+
 
 DEFAULT_PARSE_PROFILE = {
     "search": {
@@ -88,6 +96,7 @@ def _resolve_parse_profile(parse_profile=None):
             profile[section][key] = value
 
     return profile
+
 
 # ---------- Универсальное разбиение примеров ----------
 @functools.lru_cache(maxsize=5000)
@@ -165,16 +174,19 @@ def split_examples(cell, split_newline: bool = True, split_pipe: bool = True, sp
     # Preserve order, remove duplicates inside one cell.
     return list(dict.fromkeys([item for item in result if item]))
 
+
 def _extract_index_from_suffix(col_name: str, prefix: str) -> int:
     suffix = col_name[len(prefix):]
     if suffix.isdigit():
         return int(suffix)
-    return 10**9
+    return 10 ** 9
+
 
 def _sorted_prefixed_columns(columns, prefix: str):
     pattern = re.compile(rf"^{re.escape(prefix.lower())}\d+$")
     matched = [c for c in columns if pattern.match(c.lower())]
     return sorted(matched, key=lambda c: _extract_index_from_suffix(c.lower(), prefix.lower()))
+
 
 def _ensure_comment_column(df, target_name: str = "comment1"):
     comment_cols = _sorted_prefixed_columns(df.columns, "comment")
@@ -184,12 +196,14 @@ def _ensure_comment_column(df, target_name: str = "comment1"):
         df[target_name] = ""
     return df
 
+
 def _get_unified_column_lists(df):
     search_cols = _sorted_prefixed_columns(df.columns, "search")
     filter_cols = _sorted_prefixed_columns(df.columns, "display_filter")
     display_cols = _sorted_prefixed_columns(df.columns, "display")
     comment_cols = _sorted_prefixed_columns(df.columns, "comment")
     return search_cols, filter_cols, display_cols, comment_cols
+
 
 def _set_unified_attrs(df):
     search_cols, filter_cols, display_cols, comment_cols = _get_unified_column_lists(df)
@@ -198,6 +212,7 @@ def _set_unified_attrs(df):
     df.attrs["display_cols"] = display_cols
     df.attrs["comment_cols"] = comment_cols
     return df
+
 
 def _resolve_result_columns(df, filter_cols=None, display_cols=None, comment_col=None):
     default_filter_cols = df.attrs.get("filter_cols") or _sorted_prefixed_columns(df.columns, "display_filter")
@@ -224,6 +239,7 @@ def _value_to_text(value):
         pass
     return str(value)
 
+
 def _split_filter_values(value: str, split_newline: bool = True, split_pipe: bool = True):
     if value is None:
         return []
@@ -240,6 +256,7 @@ def _split_filter_values(value: str, split_newline: bool = True, split_pipe: boo
             if part:
                 parts.append(part)
     return parts
+
 
 def _explode_search_rows(
     df,
@@ -273,6 +290,7 @@ def _explode_search_rows(
     df = df.rename(columns={intermediate_col: "phrase"})
     df["phrase"] = df["phrase"].astype(str).str.strip()
     return df[df["phrase"] != ""]
+
 
 def _structured_search_results(
     query,
@@ -456,6 +474,7 @@ def prepare_runtime_dataframe(
 
     return df
 
+
 # ---------- Унифицированная загрузка табличных данных ----------
 
 def load_unified_excel(url, source_id="0", parse_profile=None):
@@ -560,6 +579,7 @@ def load_unified_excels(urls, parse_profile=None):
     df_all.attrs["phrase_embs"] = model.encode(df_all["phrase_proc"].tolist(), convert_to_tensor=True)
 
     return df_all
+
 
 # ---------- Универсальные операции поиска ----------
 def _deduplicate_structured_results(results, keep_max_score=False):
@@ -674,6 +694,7 @@ def extract_text_from_html(html):
     text = "\n\n".join(lines)
     return text
 
+
 def chunk_text(text, max_chars=1000, overlap=200):
     paragraphs = text.split("\n")
     chunks = []
@@ -687,6 +708,7 @@ def chunk_text(text, max_chars=1000, overlap=200):
     if current_chunk:
         chunks.append(current_chunk.strip())
     return chunks
+
 
 def load_document_data(urls):
     url = urls[0]
@@ -739,6 +761,7 @@ def load_document_data(urls):
 
     return df
 
+
 def semantic_search_document(query, df, top_k=5, threshold=0.3):
     model = get_model()
     query_proc = preprocess(query)
@@ -751,4 +774,3 @@ def semantic_search_document(query, df, top_k=5, threshold=0.3):
             results.append((float(score), df.iloc[idx]["chunk"]))
     results = sorted(results, key=lambda x: x[0], reverse=True)[:top_k]
     return results
-
